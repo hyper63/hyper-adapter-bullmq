@@ -1,0 +1,18 @@
+image:
+  file: .gitpod.Dockerfile
+
+tasks:
+  - name: 🏎 Start Redis Server
+    init: docker build -t hyper-redis .redis
+    command: |
+      mkdir -p /workspace/redis
+      docker run -it -p 6379:6379 -v /workspace/redis:/var/lib/redis hyper-redis
+
+  - name: 🪝 Setup hooks and run tests
+    init: deno task prepare
+    command: deno task test
+
+ports:
+  - port: 6379
+    visibility: private
+    onOpen: ignore

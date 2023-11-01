@@ -1,0 +1,15 @@
+{
+  "tasks": {
+    "prepare": "deno run -A npm:husky@^8 install",
+    "staged": "deno run -A npm:lint-staged@^15",
+    "cache": "deno cache --lock=deno.lock --lock-write deps.ts dev_deps.ts",
+    "test": "deno lint && deno fmt --check && deno test -A --unstable",
+    "test:harness": "deno run --unstable --no-check --no-lock -A ./test/hyper.ts"
+  },
+  "fmt": {
+    "include": ["./"],
+    "lineWidth": 100,
+    "singleQuote": true,
+    "semiColons": false
+  }
+}
