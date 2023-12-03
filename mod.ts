@@ -1,7 +1,7 @@
 // deno-lint-ignore-file no-explicit-any
 import { Cluster, crocks, Queue, R, Redis, Worker } from './deps.ts'
 
-import portName from './port-name.ts'
+import portName from './port_name.ts'
 import createAdapter from './adapter.ts'
 import type { AdapterConfig, ImplConfig } from './types.ts'
 
@@ -75,6 +75,8 @@ export default function BullMqQueueAdapter(config: AdapterConfig) {
       of(prevLoad)
         .map(defaultTo({}))
         .map((prevLoad) => mergeRight(prevLoad, config || {}))
+        // @ts-ignore TS does not how to reconcile the Left of Sum types
+        // ignoring for now
         .chain(checkConfig)
         .chain((adapterConfig) =>
           Async.of({})
