@@ -4,7 +4,7 @@ import type { Job, JobType, Queue as _Queue, Redis } from '../types.ts'
 import { createStoreKey } from './utils.ts'
 
 const { Async } = crocks
-const { always, cond, equals, map } = R
+const { always, cond, equals, map, omit } = R
 
 type WithRedis = { redis: Redis }
 type WithQueueArgs = WithRedis & { queue: _Queue }
@@ -121,7 +121,15 @@ export const Queue = (prefix: string) => {
              */
             .bichain(Async.Resolved, Async.Resolved)
             .map(() => job)
-            .chain(Async.fromPromise((job) => queue.add(name, job.data, { jobId: id })))
+            /**
+             * Before requeuing the job, we make sure to remove, from the payload,
+             * the error key that was used to record the previous runs error
+             *
+             * (See worker.ts process() where the error key is conditionally added)
+             */
+            .chain(
+              Async.fromPromise((job) => queue.add(name, omit(['error', job.data]), { jobId: id })),
+            )
             .map((job) => ({ id: job.id as string }))
         )
     }
