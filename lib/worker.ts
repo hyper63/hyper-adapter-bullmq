@@ -40,7 +40,36 @@ export const Worker = (prefix: string) => {
           body: JSON.stringify(job),
         })
       }))
-      .chain((res) => res.ok ? Async.Resolved(res) : Async.Rejected(res))
+      .bichain(
+        // Error
+        // @ts-ignore crocks types do be annoying
+        (err: Error) => {
+          return Async.of(JSON.stringify({ msg: err.message, stack: err.stack }))
+            /**
+             * A network error that fetch threw directly
+             *
+             * So we add this as the error for the job, updating
+             * it's data with an error key
+             */
+            .chain(Async.fromPromise((txt) => job.updateData({ ...job.data, error: txt })))
+            .chain(() => Async.Rejected(err))
+        },
+        // Response
+        (res) => {
+          return res.ok
+            ? Async.Resolved(res)
+            /**
+             * A non-ok status code, so assume an error
+             *
+             * So we add this as the error for the job, updating
+             * it's data with an error key
+             */
+            : Async.of(res)
+              .chain(Async.fromPromise((res) => res.text()))
+              .chain(Async.fromPromise((txt) => job.updateData({ ...job.data, error: txt })))
+              .chain(() => Async.Resolved(res))
+        },
+      )
       .toPromise()
 
   const close = ({ worker }: WithWorker) => () => worker.close()
