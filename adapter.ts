@@ -13,7 +13,7 @@ const handleHyperErr = ifElse(
   Async.Rejected,
 )
 
-export default function (
+export function adapter(
   { fetch, redisClient, createQueue, createWorker, concurrency, failedTtl, keyPrefix }: ImplConfig,
 ) {
   const $queue = (() => {

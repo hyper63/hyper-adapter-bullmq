@@ -1,8 +1,8 @@
 // deno-lint-ignore-file no-explicit-any
 import { Cluster, crocks, Queue, R, Redis, Worker } from './deps.ts'
 
-import portName from './port_name.ts'
-import createAdapter from './adapter.ts'
+import PORT_NAME from './port_name.ts'
+import { adapter } from './adapter.ts'
 import type { AdapterConfig, ImplConfig } from './types.ts'
 
 const { Async } = crocks
@@ -70,8 +70,8 @@ export default function BullMqQueueAdapter(config: AdapterConfig) {
 
   return Object.freeze({
     id: 'bullmq',
-    port: portName,
-    load: (prevLoad: any) =>
+    port: PORT_NAME,
+    load: (prevLoad?: any): Promise<ImplConfig> =>
       of(prevLoad)
         .map(defaultTo({}))
         .map((prevLoad) => mergeRight(prevLoad, config || {}))
@@ -89,7 +89,7 @@ export default function BullMqQueueAdapter(config: AdapterConfig) {
             .map(assoc('createQueue', setCreateQueue()))
         )
         .toPromise()
-        .catch((e) => console.log('Error: In Load Method', e.message)),
-    link: (config: ImplConfig) => () => createAdapter(config),
+        .catch((e) => console.log('Error: In Load Method', e.message)) as Promise<ImplConfig>,
+    link: (config: ImplConfig) => () => adapter(config),
   })
 }
