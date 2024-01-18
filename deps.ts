@@ -8,7 +8,7 @@ export { default as crocks } from 'npm:crocks@0.12.4'
 
 export { hmac } from 'https://deno.land/x/hmac@v2.0.1/mod.ts'
 
-export { type Job, type JobType, Queue, Worker } from 'npm:bullmq@4.12.7'
+export { type Job, type JobType, Queue, Worker } from 'npm:bullmq@5.1.3'
 export { Cluster, Redis } from 'npm:ioredis@5.3.2'
 export { default as cuid } from 'npm:cuid@3.0.0'
 
