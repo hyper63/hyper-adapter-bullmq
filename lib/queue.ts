@@ -1,7 +1,7 @@
 // deno-lint-ignore-file no-explicit-any
 import { crocks, cuid, HyperErr, R } from '../deps.ts'
 import type { Job, JobType, Queue as _Queue, Redis } from '../types.ts'
-import { createStoreKey } from './utils.ts'
+import { createStoreKey, trampoline } from './utils.ts'
 
 const { Async } = crocks
 const { always, cond, equals, map, omit } = R
@@ -35,20 +35,34 @@ export const Queue = (prefix: string) => {
 
   const all = ({ redis }: WithRedis) => () => {
     function getKeys(scan: typeof redis.scan, matcher: string, count: number) {
-      function next([cursor, keys]: Awaited<ReturnType<typeof scan>>): Promise<string[]> {
-        return cursor === '0'
-          ? Async.Resolved(keys).toPromise()
-          : Async.fromPromise(() => scan(cursor, 'MATCH', matcher, 'COUNT', count))()
-            .chain(next as any)
-            .map((v) => keys.concat(v as string[]))
-            .toPromise()
+      function page(
+        [cursor, keys]: [string | number, string[]],
+      ): Promise<string[] | (() => Promise<string[]>)> {
+        return Async.fromPromise(() => scan(cursor, 'MATCH', matcher, 'COUNT', count))()
+          .map(([nCursor, nKeys]) => {
+            keys = keys.concat(nKeys)
+
+            return nCursor === '0'
+              ? keys as string[]
+              /**
+               * Return a thunk that continues the next iteration, thus ensuring the callstack
+               * is only ever one call deep.
+               *
+               * This is continuation passing style, to be leverage by our trampoline
+               */
+              : (() => page([nCursor, keys])) as () => Promise<string[]>
+          }).toPromise()
       }
 
-      return scan(0, 'MATCH', matcher, 'COUNT', count).then(next)
+      /**
+       * Our initial thunk that performs the first scan
+       */
+      return Async.fromPromise(page)([0, []])
+        .chain(Async.fromPromise(trampoline))
     }
 
     return Async.of(createStoreKey(prefix, '*'))
-      .chain(Async.fromPromise((matcher) => getKeys(redis.scan.bind(redis), matcher, 50)))
+      .chain((matcher) => getKeys(redis.scan.bind(redis), matcher, 50))
   }
 
   const create =
