@@ -7,7 +7,7 @@ import type { AdapterConfig, ImplConfig } from './types.ts'
 
 const { Async } = crocks
 const { of, Resolved, Rejected } = Async
-const { assoc, defaultTo, mergeRight, pathOr } = R
+const { assoc, defaultTo, mergeRight, pathOr, mergeLeft } = R
 
 const SEVEN_DAYS = 7 * 24 * 60 * 60
 
@@ -17,7 +17,9 @@ export default function BullMqQueueAdapter(config: AdapterConfig) {
     return Resolved(config)
   }
 
-  const setRedisClient = (config: AdapterConfig): ImplConfig['redisClient'] => {
+  const setRedisClient = (
+    config: AdapterConfig,
+  ): Pick<ImplConfig, 'queueRedisClient' | 'workerRedisClient'> => {
     const { url } = config
 
     const configFromUrl = url ? new URL(url) : {} as URL
@@ -26,14 +28,24 @@ export default function BullMqQueueAdapter(config: AdapterConfig) {
     const port = Number(configFromUrl.port || '6379')
     const password = configFromUrl.password || undefined
 
-    let client
+    let queueRedisClient, workerRedisClient
+    /**
+     * See https://docs.bullmq.io/bull/patterns/persistent-connections
+     * on why we set maxRetriesPerRequest differently for Queues vs. Workers
+     */
     if (config.options?.cluster) {
-      client = new Cluster([{ host, port }])
+      queueRedisClient = new Cluster([{ host, port }], {
+        redisOptions: { maxRetriesPerRequest: 20 },
+      })
+      workerRedisClient = queueRedisClient.duplicate([{ host, port }], {
+        redisOptions: { maxRetriesPerRequest: 20 },
+      })
     } else {
-      client = new Redis({ host, port, password })
+      queueRedisClient = new Redis({ host, port, password, maxRetriesPerRequest: 20 })
+      workerRedisClient = queueRedisClient.duplicate({ maxRetriesPerRequest: null })
     }
 
-    return client
+    return { queueRedisClient, workerRedisClient }
   }
 
   const setCreateQueue = (): ImplConfig['createQueue'] => ({ redisClient, keyPrefix }) =>
@@ -43,18 +55,21 @@ export default function BullMqQueueAdapter(config: AdapterConfig) {
     })
 
   const setCreateWorker =
-    (): ImplConfig['createWorker'] => ({ redisClient, failedTtl, processor }) => {
+    (): ImplConfig['createWorker'] => ({ redisClient, processor, keyPrefix }) => {
       return new Worker(
         'hyper-queue',
         processor,
         {
+          prefix: keyPrefix,
           connection: redisClient,
-          removeOnComplete: {
-            count: 100,
-          },
-          removeOnFail: {
-            age: failedTtl,
-          },
+          /**
+           * The adapter uses its own mechanism for
+           * storing failed jobs, and so does not need
+           * BullMQ to persist jobs, once they've been processed,
+           * successfully or unsuccessfully
+           */
+          removeOnComplete: { count: 0 },
+          removeOnFail: { count: 0 },
         },
       )
     }
@@ -84,7 +99,7 @@ export default function BullMqQueueAdapter(config: AdapterConfig) {
             .map(assoc('concurrency', setConcurrency(adapterConfig as AdapterConfig)))
             .map(assoc('failedTtl', setFailedTtl(adapterConfig as AdapterConfig)))
             .map(assoc('fetch', fetch))
-            .map(assoc('redisClient', setRedisClient(adapterConfig as AdapterConfig)))
+            .map(mergeLeft(setRedisClient(adapterConfig as AdapterConfig)))
             .map(assoc('createWorker', setCreateWorker()))
             .map(assoc('createQueue', setCreateQueue()))
         )

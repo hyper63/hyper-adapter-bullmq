@@ -1,76 +1,163 @@
 // deno-lint-ignore-file no-explicit-any
 import { crocks, cuid, HyperErr, R } from '../deps.ts'
-import type { Job, JobType, Queue as _Queue, Redis } from '../types.ts'
-import { createStoreKey, trampoline } from './utils.ts'
+import type { Queue as _Queue, Redis } from '../types.ts'
+import { createJobKey, createStoreKey, trampoline } from './utils.ts'
 
 const { Async } = crocks
-const { always, cond, equals, map, omit } = R
+const { map } = R
 
 type WithRedis = { redis: Redis }
 type WithQueueArgs = WithRedis & { queue: _Queue }
 
+type Job = {
+  id: string
+  data: Record<string, any>
+  error?: any
+}
+
 export const Queue = (prefix: string) => {
-  const checkQueueExists = ({ redis }: WithRedis) => (name: string) =>
-    Async.of(createStoreKey(prefix, name))
+  function checkQueueExists(redis: Redis, name: string) {
+    return Async.of(createStoreKey(prefix, name))
       .chain(Async.fromPromise((key) => redis.get(key)))
       .chain((v) =>
         v
           ? Async.Resolved(v)
           : Async.Rejected(HyperErr({ status: 404, msg: 'Queue Does Not Exist' }))
       )
+  }
 
-  const getJob =
-    ({ redis, queue }: WithQueueArgs) => ({ name, id }: { name: string; id: string }) => {
-      const client = { checkQueueExists: checkQueueExists({ redis }) }
+  function getKeys(redis: Redis, matcher: string, count: number) {
+    function page(
+      [cursor, keys]: [string | number, string[]],
+    ): Promise<string[] | (() => Promise<string[]>)> {
+      if (cursor === '0') return Async.of(keys).toPromise()
 
-      return client.checkQueueExists(name)
-        .chain(Async.fromPromise((_) => queue.getJob(id)))
-        .chain((job) =>
-          job
-            ? Async.Resolved(job)
-            : Async.Rejected(HyperErr({ status: 404, 'msg': 'job not found' }))
-        )
-        .map((job) => job as Job)
+      return Async.fromPromise(() => redis.scan(cursor, 'MATCH', matcher, 'COUNT', count))()
+        .map(([nCursor, nKeys]) => {
+          keys = keys.concat(nKeys)
+
+          /**
+           * Return a thunk that continues the next iteration, thus ensuring the callstack
+           * is only ever one call deep.
+           *
+           * This is continuation passing style, to be leverage by our trampoline
+           */
+          return (() => page([nCursor, keys])) as () => Promise<string[]>
+        }).toPromise()
     }
 
-  const all = ({ redis }: WithRedis) => () => {
-    function getKeys(scan: typeof redis.scan, matcher: string, count: number) {
-      function page(
-        [cursor, keys]: [string | number, string[]],
-      ): Promise<string[] | (() => Promise<string[]>)> {
-        return Async.fromPromise(() => scan(cursor, 'MATCH', matcher, 'COUNT', count))()
-          .map(([nCursor, nKeys]) => {
-            keys = keys.concat(nKeys)
+    /**
+     * Our initial thunk that performs the first scan
+     */
+    return Async.fromPromise(page)([0, []])
+      .chain(Async.fromPromise(trampoline))
+  }
 
-            return nCursor === '0'
-              ? keys as string[]
-              /**
-               * Return a thunk that continues the next iteration, thus ensuring the callstack
-               * is only ever one call deep.
-               *
-               * This is continuation passing style, to be leverage by our trampoline
-               */
-              : (() => page([nCursor, keys])) as () => Promise<string[]>
+  function getValues(mget: Redis['mget'], count: number) {
+    return function (keys: string[]) {
+      function page(
+        keys: string[],
+        values: Record<string, any>[],
+      ): Promise<Record<string, any>[] | (() => Promise<Record<string, any>[]>)> {
+        if (!keys.length) return Async.of(values).toPromise()
+
+        return Async.of(keys.splice(0, count))
+          /**
+           * We are using hash slots, so all keys for a store will be mapped
+           * to a single hash slot and so can be retrieved as a set.
+           *
+           * Regardless, we still break up the operations into "pages" according
+           * to the provided count, so as to not block the Redis thread for too long
+           * on any given operation
+           */
+          .chain(Async.fromPromise((nKeys) => mget(nKeys)))
+          .map((nValues) => {
+            values = values
+              .concat(nValues.map((v) => v ? JSON.parse(v) : v))
+              .filter((v) => !!v)
+
+            /**
+             * Return a thunk that continues the next iteration, thus ensuring the callstack
+             * is only ever one call deep.
+             *
+             * This is continuation passing style, to be leverage by our trampoline
+             */
+            return (() => page(keys, values)) as () => Promise<Record<string, any>[]>
           }).toPromise()
       }
 
       /**
        * Our initial thunk that performs the first scan
        */
-      return Async.fromPromise(page)([0, []])
+      return Async.fromPromise(() => page(keys, []))()
+        .chain(Async.fromPromise(trampoline))
+        .map((values) => values)
+    }
+  }
+
+  function deleteKeys(redis: Redis, count: number) {
+    return function (keys: string[]) {
+      function page(keys: string[]): Promise<unknown[] | (() => Promise<unknown[]>)> {
+        if (!keys.length) return Async.of([]).toPromise()
+
+        return Async.of(keys.splice(0, count))
+          /**
+           * We are using hash slots, so all keys for a store will be mapped
+           * to a single hash slot and so can be deleted as a set.
+           *
+           * Regardless, we still break up the operations into "pages" according
+           * to the provided count, so as to not block the Redis thread for too long
+           * on any given operation
+           */
+          .chain(Async.fromPromise((nKeys) => redis.del(nKeys)))
+          /**
+           * Return a thunk that continues the next iteration, thus ensuring the callstack
+           * is only ever one call deep.
+           *
+           * This is continuation passing style, to be leverage by our trampoline
+           */
+          .map(() => (() => page(keys)) as () => Promise<unknown[]>)
+          .toPromise()
+      }
+
+      /**
+       * Our initial thunk that performs the first scan
+       */
+      return Async.of(keys)
+        .chain(Async.fromPromise(page))
         .chain(Async.fromPromise(trampoline))
     }
+  }
 
+  function getJob(
+    { redis, name, id, status }: {
+      redis: Redis
+      name: string
+      id: string
+      status: 'READY' | 'ERROR'
+    },
+  ) {
+    return checkQueueExists(redis, name)
+      .chain(Async.fromPromise((_) => redis.get(createJobKey(prefix, name, status, id))))
+      .chain((job) =>
+        job
+          ? Async.Resolved(JSON.parse(job))
+          : Async.Rejected(HyperErr({ status: 404, 'msg': 'job not found' }))
+      )
+      .map((job) => job as Job)
+  }
+
+  const all = ({ redis }: WithRedis) => () => {
     return Async.of(createStoreKey(prefix, '*'))
-      .chain((matcher) => getKeys(redis.scan.bind(redis), matcher, 50))
+      .chain((matcher) => getKeys(redis, matcher, 50))
+      .chain(getValues(redis.mget.bind(redis), 50))
+      .map((values) => values.map((value) => value.name))
   }
 
   const create =
     ({ redis }: WithRedis) =>
     ({ name, target, secret }: { name: string; target: string; secret?: string }) => {
-      const client = { checkQueueExists: checkQueueExists({ redis }) }
-
-      return client.checkQueueExists(name)
+      return checkQueueExists(redis, name)
         .bichain(
           () =>
             Async.of(createStoreKey(prefix, name))
@@ -84,78 +171,102 @@ export const Queue = (prefix: string) => {
     }
 
   const destroy = ({ redis }: WithRedis) => (name: string) => {
-    const client = { checkQueueExists: checkQueueExists({ redis }) }
-
-    return client.checkQueueExists(name)
-      .map(() => createStoreKey(prefix, name))
-      .chain(Async.fromPromise((key) => redis.del(key)))
+    return checkQueueExists(redis, name)
+      /**
+       * Find any keys for jobs on the hyper queue and the hyper queue metadata key, itself
+       *
+       * eg. prefix_store_{foo-queue}*
+       */
+      .chain(() => getKeys(redis, `${createStoreKey(prefix, name)}*`, 100))
+      .chain(deleteKeys(redis, 100))
   }
 
   const enqueue =
     ({ redis, queue }: WithQueueArgs) =>
     ({ name, job }: { name: string; job: Record<string, unknown> }) => {
-      const client = { checkQueueExists: checkQueueExists({ redis }) }
-
-      return client.checkQueueExists(name)
+      return checkQueueExists(redis, name)
         .map(() => cuid())
         /**
          * Set the name of the job to name of the queue, so that it
          * can be used to lookup the queue metadata when the job is processed
          */
         .chain(Async.fromPromise((jobId) => queue.add(name, job, { jobId })))
+        .chain(Async.fromPromise(async (job) => {
+          /**
+           * Create a key to track this job as ready in the hyper queue
+           *
+           * This will be removed when the job begins processing, so no TTL is included
+           */
+          await redis.set(
+            createJobKey(prefix, name, 'READY', job.id as string),
+            JSON.stringify({ id: job.id, data: job.data }),
+          )
+
+          return job
+        }))
         .map((job) => ({ id: job.id as string, data: job.data }))
     }
 
-  const jobs =
-    ({ redis, queue }: WithQueueArgs) =>
-    ({ name, status }: { name: string; status: 'READY' | 'ERROR' }) => {
-      const client = { checkQueueExists: checkQueueExists({ redis }) }
+  const jobs = ({ redis }: WithQueueArgs) =>
+  (
+    { name, status }: { name: string; status: 'READY' | 'ERROR' },
+  ) => {
+    return checkQueueExists(redis, name)
+      /**
+       * Find all job keys based on status, using a wildcard for the job id.
+       *
+       * This should find all the jobs on the hype queue with that status
+       */
+      .chain(() => getKeys(redis, createJobKey(prefix, name, status, '*'), 100))
+      .chain(getValues(redis.mget.bind(redis), 100))
+      .map(
+        map((job) => ({
+          id: job.id as string,
+          status,
+          job: job.data,
+          error: job.error,
+        })),
+      )
+  }
 
-      return client.checkQueueExists(name)
-        .map(() => status)
-        .map(cond<any, JobType[]>([
-          [equals('READY'), always(['waiting', 'waiting-children', 'delayed'])],
-          [equals('ERROR'), always(['failed'])],
-        ]))
-        .chain(Async.fromPromise((jobTypes) => queue.getJobs(jobTypes)))
-        .map(map((job) => ({ id: job.id as string, status, job: job.data })))
-    }
+  const retry = ({ redis, queue }: WithQueueArgs) => {
+    const reenqueue = enqueue({ redis, queue })
 
-  const retry =
-    ({ redis, queue }: WithQueueArgs) => ({ name, id }: { name: string; id: string }) => {
-      const client = { getJob: getJob({ redis, queue }) }
-
-      return client.getJob({ name, id })
+    return ({ name, id }: { name: string; id: string }) => {
+      return getJob({ redis, name, id, status: 'ERROR' })
         .chain((job) =>
           Async.of(job)
-            .chain(Async.fromPromise((job) => queue.remove(job.id as string)))
             /**
-             * A job was found, but then not found for removal, so something else removed it,
-             * so just resolve back to the happy path
+             * We know the job exists, so enqueue it,
+             * and also remove the key used to track it's status
              */
-            .bichain(Async.Resolved, Async.Resolved)
-            .map(() => job)
-            /**
-             * Before requeuing the job, we make sure to remove, from the payload,
-             * the error key that was used to record the previous runs error
-             *
-             * (See worker.ts process() where the error key is conditionally added)
-             */
-            .chain(
-              Async.fromPromise((job) => queue.add(name, omit(['error', job.data]), { jobId: id })),
-            )
-            .map((job) => ({ id: job.id as string }))
+            .chain(Async.fromPromise((job) =>
+              Promise.all([
+                redis.del(createJobKey(prefix, name, 'ERROR', id)),
+                reenqueue({ name, job: job.data }).toPromise(),
+              ])
+            ))
+            .map(([, newJob]) => newJob)
         )
+        .map((newJob) => ({ id: newJob.id as string }))
     }
+  }
 
   const cancel =
     ({ redis, queue }: WithQueueArgs) => ({ name, id }: { name: string; id: string }) => {
-      const client = { getJob: getJob({ redis, queue }) }
-
-      return client.getJob({ name, id })
+      return getJob({ redis, name, id, status: 'READY' })
         .chain((job) =>
           Async.of(job)
-            .chain(Async.fromPromise((job) => queue.remove(job.id as string)))
+            /**
+             * We know the job exists, so remove it from the queue,
+             * and also remove the key used to track it's status
+             */
+            .chain(Async.fromPromise((job) =>
+              Promise.all([
+                queue.remove(job.id as string),
+                redis.del(createJobKey(prefix, name, 'READY', id)),
+              ])
+            ))
             /**
              * A job was found, but then not found for removal, so something else removed it,
              * so just resolve back to the happy path
@@ -165,6 +276,8 @@ export const Queue = (prefix: string) => {
         )
     }
 
+  const close = ({ queue }: WithQueueArgs) => () => queue.close()
+
   return {
     all,
     create,
@@ -173,5 +286,6 @@ export const Queue = (prefix: string) => {
     jobs,
     retry,
     cancel,
+    close,
   }
 }

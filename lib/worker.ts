@@ -1,12 +1,13 @@
 import { crocks } from '../deps.ts'
 import type { Job, Redis, Worker as _Worker } from '../types.ts'
-import { computeSignature, createStoreKey } from './utils.ts'
+import { computeSignature, createJobKey, createStoreKey } from './utils.ts'
 
 const { Async } = crocks
 
 type Deps = {
   redis: Redis
   fetch: typeof fetch
+  failedTtl: number
 }
 
 type WithWorker = {
@@ -14,12 +15,12 @@ type WithWorker = {
 }
 
 export const Worker = (prefix: string) => {
-  const process = ({ redis, fetch }: Deps) => (job: Job) =>
+  const process = ({ redis, fetch, failedTtl }: Deps) => (job: Job) => {
     /**
      * The job name is the same as the hyper queue name
      * so we can use it to look up the queue metadata
      */
-    Async.of(createStoreKey(prefix, job.name))
+    return Async.of(createStoreKey(prefix, job.name))
       .chain(Async.fromPromise((key) => redis.get(key)))
       .map((res) => JSON.parse(res as string) as { target: string; secret: string })
       .chain(Async.fromPromise(({ target, secret }) => {
@@ -37,7 +38,7 @@ export const Worker = (prefix: string) => {
               }
               : {}),
           },
-          body: JSON.stringify(job),
+          body: JSON.stringify(job.data),
         })
       }))
       .bichain(
@@ -48,11 +49,20 @@ export const Worker = (prefix: string) => {
             /**
              * A network error that fetch threw directly
              *
-             * So we add this as the error for the job, updating
-             * it's data with an error key
+             * So we add this as the error for the job, creating an error
+             * key and storing the data for the configured failedTtl
              */
-            .chain(Async.fromPromise((txt) => job.updateData({ ...job.data, error: txt })))
-            .chain(() => Async.Rejected(err))
+            .chain(
+              Async.fromPromise((txt) =>
+                redis.set(
+                  createJobKey(prefix, job.name, 'ERROR', job.id as string),
+                  JSON.stringify({ id: job.id, data: job.data, error: txt }),
+                  'EX',
+                  failedTtl,
+                )
+              ),
+            )
+            .chain(() => Async.Resolved(err))
         },
         // Response
         (res) => {
@@ -61,16 +71,24 @@ export const Worker = (prefix: string) => {
             /**
              * A non-ok status code, so assume an error
              *
-             * So we add this as the error for the job, updating
-             * it's data with an error key
+             * So we add this as the error for the job, creating an error
+             * key and storing the data for the configured failedTtl
              */
             : Async.of(res)
               .chain(Async.fromPromise((res) => res.text()))
-              .chain(Async.fromPromise((txt) => job.updateData({ ...job.data, error: txt })))
+              .chain(Async.fromPromise((txt) =>
+                redis.set(
+                  createJobKey(prefix, job.name, 'ERROR', job.id as string),
+                  JSON.stringify({ id: job.id, data: job.data, error: txt }),
+                  'EX',
+                  failedTtl,
+                )
+              ))
               .chain(() => Async.Resolved(res))
         },
       )
       .toPromise()
+  }
 
   const close = ({ worker }: WithWorker) => () => worker.close()
 

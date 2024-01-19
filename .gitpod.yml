@@ -10,7 +10,9 @@ tasks:
 
   - name: 🪝 Setup hooks and run tests
     init: deno task prepare
-    command: deno task test
+    command: |
+      export REDIS_URL=mongodb://127.0.0.1:6379
+      deno task test
 
 ports:
   - port: 6379

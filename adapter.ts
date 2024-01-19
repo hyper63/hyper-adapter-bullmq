@@ -14,30 +14,43 @@ const handleHyperErr = ifElse(
 )
 
 export function adapter(
-  { fetch, redisClient, createQueue, createWorker, concurrency, failedTtl, keyPrefix }: ImplConfig,
+  {
+    fetch,
+    queueRedisClient,
+    workerRedisClient,
+    createQueue,
+    createWorker,
+    concurrency,
+    failedTtl,
+    keyPrefix,
+  }: ImplConfig,
 ) {
   const $queue = (() => {
     const queue = Queue(keyPrefix)
-    const queueClient = createQueue({ redisClient, keyPrefix })
+    const queueClient = createQueue({ redisClient: queueRedisClient, keyPrefix })
+    Deno.addSignalListener('SIGINT', queue.close({ redis: queueRedisClient, queue: queueClient }))
 
     return {
-      all: queue.all({ redis: redisClient }),
-      create: queue.create({ redis: redisClient }),
-      destroy: queue.destroy({ redis: redisClient }),
-      enqueue: queue.enqueue({ redis: redisClient, queue: queueClient }),
-      jobs: queue.jobs({ redis: redisClient, queue: queueClient }),
-      retry: queue.retry({ redis: redisClient, queue: queueClient }),
-      cancel: queue.cancel({ redis: redisClient, queue: queueClient }),
+      all: queue.all({ redis: queueRedisClient }),
+      create: queue.create({ redis: queueRedisClient }),
+      destroy: queue.destroy({ redis: queueRedisClient }),
+      enqueue: queue.enqueue({ redis: queueRedisClient, queue: queueClient }),
+      jobs: queue.jobs({ redis: queueRedisClient, queue: queueClient }),
+      retry: queue.retry({ redis: queueRedisClient, queue: queueClient }),
+      cancel: queue.cancel({ redis: queueRedisClient, queue: queueClient }),
     }
   })() /**
    * Create workers according to the desired concurrency
    */
   ;(() => {
     const worker = Worker(keyPrefix)
-    const processor = worker.process({ redis: redisClient, fetch })
-
-    return Array(concurrency).fill(0).map(() => {
-      const workerClient = createWorker({ redisClient, failedTtl, processor })
+    const processor = worker.process({ redis: queueRedisClient, fetch, failedTtl })
+    Array(concurrency).fill(0).map(() => {
+      const workerClient = createWorker({
+        redisClient: workerRedisClient,
+        processor,
+        keyPrefix,
+      })
       Deno.addSignalListener('SIGINT', worker.close({ worker: workerClient }))
     })
   })()

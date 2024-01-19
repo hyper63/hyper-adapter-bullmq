@@ -15,14 +15,15 @@ export type AdapterConfig = {
 }
 
 export type ImplConfig = {
-  redisClient: Redis | Cluster
+  queueRedisClient: Redis | Cluster
+  workerRedisClient: Redis | Cluster
   fetch: typeof fetch
-  createQueue: (args: { redisClient: ImplConfig['redisClient']; keyPrefix: string }) => Queue
+  createQueue: (args: { redisClient: ImplConfig['queueRedisClient']; keyPrefix: string }) => Queue
   createWorker: (
     args: {
-      redisClient: ImplConfig['redisClient']
-      failedTtl: number
+      redisClient: ImplConfig['queueRedisClient']
       processor: Worker['processFn']
+      keyPrefix: string
     },
   ) => Worker
   concurrency: number
