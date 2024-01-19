@@ -134,11 +134,24 @@ export const Queue = (prefix: string) => {
       redis: Redis
       name: string
       id: string
-      status: 'READY' | 'ERROR'
+      status: 'READY' | 'ERROR' | '*'
     },
   ) {
     return checkQueueExists(redis, name)
-      .chain(Async.fromPromise((_) => redis.get(createJobKey(prefix, name, status, id))))
+      .chain(Async.fromPromise((_) => {
+        /**
+         * Try and fetch both keys -- only one of them
+         * will exist
+         */
+        if (status === '*') {
+          return redis.mget([
+            createJobKey(prefix, name, 'READY', id),
+            createJobKey(prefix, name, 'ERROR', id),
+          ]).then(([ready, errored]) => ready || errored)
+        }
+
+        return redis.get(createJobKey(prefix, name, status, id))
+      }))
       .chain((job) =>
         job
           ? Async.Resolved(JSON.parse(job))
@@ -254,7 +267,7 @@ export const Queue = (prefix: string) => {
 
   const cancel =
     ({ redis, queue }: WithQueueArgs) => ({ name, id }: { name: string; id: string }) => {
-      return getJob({ redis, name, id, status: 'READY' })
+      return getJob({ redis, name, id, status: '*' })
         .chain((job) =>
           Async.of(job)
             /**
@@ -264,7 +277,17 @@ export const Queue = (prefix: string) => {
             .chain(Async.fromPromise((job) =>
               Promise.all([
                 queue.remove(job.id as string),
-                redis.del(createJobKey(prefix, name, 'READY', id)),
+                /**
+                 * We don't know whether job was in a READY or ERROR state,
+                 * so we just attempt to delete both keys.
+                 *
+                 * This also helps cleanup in case a key is somehow missed
+                 * in other business logic
+                 */
+                redis.del([
+                  createJobKey(prefix, name, 'READY', id),
+                  createJobKey(prefix, name, 'ERROR', id),
+                ]),
               ])
             ))
             /**

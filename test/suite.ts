@@ -57,7 +57,8 @@ async (
       await a.create({ name: 'fizzbuzz', target })
 
       const res = await a.index()
-      assertObjectMatch(res as any, { ok: true, queues: ['fizzbuzz', 'foobar'] })
+      assert((res as any).ok)
+      assertEquals((res as any).queues.sort(), ['fizzbuzz', 'foobar'])
 
       await Promise.all([
         a.delete('foobar'),
@@ -165,6 +166,151 @@ async (
       assert((res as any).ok)
       assert((res as any).id)
       await worker
+
+      await a.delete(queue)
+    })
+  })
+
+  await t.step('get', async (t) => {
+    // TODO: how to test get READY jobs?
+
+    await t.step('should get the ERROR jobs', async () => {
+      await a.create({ name: queue, target, secret: 'foobar' })
+
+      let worker = Promise.resolve()
+
+      /**
+       * Return an error from the worker, so that the adapter
+       * will create an error key for the DLQ
+       */
+      if (isMockFetch) {
+        worker = new Promise((resolve) => {
+          innerMockFetch = async () => {
+            resolve(undefined)
+            return new Response('Woops', { status: 422 })
+          }
+        })
+      }
+
+      await a.post({ name: queue, job })
+      await worker
+
+      const jobRes = await a.get({ name: queue, status: 'ERROR' })
+      assertObjectMatch(jobRes as any, {
+        ok: true,
+        jobs: [{
+          status: 'ERROR',
+          job: { type: 'FOOBAR', payload: { id: 1 } },
+          error: 'Woops',
+        }],
+      })
+      assert((jobRes as any).jobs[0].id)
+
+      await a.delete(queue)
+    })
+  })
+
+  await t.step('retry', async (t) => {
+    await t.step('should retry the job', async () => {
+      await a.create({ name: queue, target, secret: 'foobar' })
+
+      let worker = Promise.resolve()
+
+      /**
+       * Return an error from the worker, so that the adapter
+       * will create an error key for the DLQ
+       */
+      if (isMockFetch) {
+        worker = new Promise((resolve) => {
+          innerMockFetch = async () => {
+            resolve(undefined)
+            return new Response('Woops', { status: 422 })
+          }
+        })
+      }
+
+      await a.post({ name: queue, job })
+      await worker
+
+      let jobRes = await a.get({ name: queue, status: 'ERROR' })
+      assert((jobRes as any).jobs.length)
+      const { id } = (jobRes as any).jobs[0]
+
+      /**
+       * Return an success from the worker this time,
+       * which should remove the job fromt he DLQ on retry
+       */
+      if (isMockFetch) {
+        worker = new Promise((resolve) => {
+          innerMockFetch = async () => {
+            resolve(undefined)
+            return new Response('OK', { status: 200 })
+          }
+        })
+      }
+
+      const res = await a.retry({ name: queue, id })
+      assert((res as any).ok)
+      assert((res as any).id)
+      await worker
+
+      jobRes = await a.get({ name: queue, status: 'ERROR' })
+      assertObjectMatch(jobRes as any, { ok: true, jobs: [] })
+
+      await a.delete(queue)
+    })
+
+    await t.step('should return a HyperErr(404) if the job is not found', async () => {
+      await a.create({ name: queue, target, secret: 'foobar' })
+
+      const res = await a.retry({ name: queue, id: 'foo-123' })
+      assertObjectMatch(res as any, { ok: false, status: 404 })
+
+      await a.delete(queue)
+    })
+  })
+
+  await t.step('cancel', async (t) => {
+    await t.step('should cancel the job', async () => {
+      await a.create({ name: queue, target, secret: 'foobar' })
+
+      let worker = Promise.resolve()
+
+      /**
+       * Return an error from the worker, so that the adapter
+       * will create an error key for the DLQ
+       */
+      if (isMockFetch) {
+        worker = new Promise((resolve) => {
+          innerMockFetch = async () => {
+            resolve(undefined)
+            return new Response('Woops', { status: 422 })
+          }
+        })
+      }
+
+      await a.post({ name: queue, job })
+      await worker
+
+      let jobRes = await a.get({ name: queue, status: 'ERROR' })
+      assert((jobRes as any).jobs.length)
+      const { id } = (jobRes as any).jobs[0]
+
+      const res = await a.cancel({ name: queue, id })
+      assert((res as any).ok)
+      assert((res as any).id)
+
+      jobRes = await a.get({ name: queue, status: 'ERROR' })
+      assertObjectMatch(jobRes as any, { ok: true, jobs: [] })
+
+      await a.delete(queue)
+    })
+
+    await t.step('should return a HyperErr(404) if the job is not found', async () => {
+      await a.create({ name: queue, target, secret: 'foobar' })
+
+      const res = await a.cancel({ name: queue, id: 'foo-123' })
+      assertObjectMatch(res as any, { ok: false, status: 404 })
 
       await a.delete(queue)
     })
