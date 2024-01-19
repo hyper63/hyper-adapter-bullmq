@@ -73,7 +73,7 @@ jobs:
     # Releases are performed via a workflow dispatch
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    needs: [test, test-native-integration-self-hosted, test-native-integration-atlas]
+    needs: [test, test-integration]
     steps:
       - name: ⬇️ Checkout repo
         uses: actions/checkout@v3
