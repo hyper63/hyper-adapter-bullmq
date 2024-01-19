@@ -17,10 +17,16 @@ type WithWorker = {
 export const Worker = (prefix: string) => {
   const process = ({ redis, fetch, failedTtl }: Deps) => (job: Job) => {
     /**
-     * The job name is the same as the hyper queue name
-     * so we can use it to look up the queue metadata
+     * We first immediately remove the READY key for the job, since
+     * it's began processing
      */
-    return Async.of(createStoreKey(prefix, job.name))
+    return Async.of(createJobKey(prefix, job.name, 'READY', job.id as string))
+      .chain(Async.fromPromise((jobKey) => redis.del(jobKey)))
+      /**
+       * The job name is the same as the hyper queue name
+       * so we can use it to look up the queue metadata
+       */
+      .map(() => createStoreKey(prefix, job.name))
       .chain(Async.fromPromise((key) => redis.get(key)))
       .map((res) => JSON.parse(res as string) as { target: string; secret: string })
       .chain(Async.fromPromise(({ target, secret }) => {

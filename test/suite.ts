@@ -92,6 +92,42 @@ async (
       assertObjectMatch(res as any, { ok: true })
     })
 
+    await t.step('should remove job data when deleting the queue', async () => {
+      await a.create({ name: queue, target, secret: 'foobar' })
+
+      let worker = Promise.resolve()
+
+      /**
+       * Return an error from the worker, so that the adapter
+       * will create an error key for the DLQ
+       */
+      if (isMockFetch) {
+        worker = new Promise((resolve) => {
+          innerMockFetch = async () => {
+            resolve(undefined)
+            return new Response('Woops', { status: 422 })
+          }
+        })
+      }
+
+      await a.post({ name: queue, job })
+      await worker
+
+      /**
+       * Deleting the queue should also remove the ERROR key for the
+       * job above.
+       *
+       * So delete the queue, recreate it, and confirm that it's DLQ
+       * is empty
+       */
+      await a.delete(queue)
+      await a.create({ name: queue, target, secret: 'foobar' })
+      const jobRes = await a.get({ name: queue, status: 'ERROR' })
+      assertObjectMatch(jobRes as any, { ok: true, jobs: [] })
+
+      await a.delete(queue)
+    })
+
     await t.step('should return a HyperErr(404) if the queue does not exist', async () => {
       const res = await a.delete(queue)
       assertObjectMatch(res as any, { ok: false, status: 404 })
