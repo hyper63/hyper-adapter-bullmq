@@ -3,7 +3,8 @@
     "prepare": "deno run -A --no-lock npm:husky@^8 install",
     "staged": "deno run -A --no-lock npm:lint-staged@^15",
     "cache": "deno cache --lock=deno.lock --lock-write deps.ts dev_deps.ts",
-    "test": "deno lint && deno fmt --check && deno test -A --unstable",
+    "test": "deno lint && deno fmt --check && deno test -A --unstable --ignore='*.integration.test.ts'",
+    "test:integration": "deno test -A --unstable adapter.integration.test.ts",
     "test:harness": "deno run --unstable --no-check --no-lock -A ./test/hyper.ts"
   },
   "fmt": {
@@ -11,8 +12,5 @@
     "lineWidth": 100,
     "singleQuote": true,
     "semiColons": false
-  },
-  "test": {
-    "exclude": ["*.integration.test.ts"]
   }
 }
