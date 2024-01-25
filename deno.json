@@ -3,9 +3,9 @@
     "prepare": "deno run -A --no-lock npm:husky@^8 install",
     "staged": "deno run -A --no-lock npm:lint-staged@^15",
     "cache": "deno cache --lock=deno.lock --lock-write deps.ts dev_deps.ts",
-    "test": "deno lint && deno fmt --check && deno test -A --unstable --ignore='*.integration.test.ts'",
-    "test:integration": "deno test -A --unstable adapter.integration.test.ts",
-    "test:harness": "deno run --unstable --no-check --no-lock -A ./test/hyper.ts"
+    "test": "deno lint && deno fmt --check && deno test -A --ignore='*.integration.test.ts'",
+    "test:integration": "deno test -A adapter.integration.test.ts",
+    "test:harness": "deno run --no-check --no-lock -A ./test/hyper.ts"
   },
   "fmt": {
     "include": ["./"],
