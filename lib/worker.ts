@@ -1,6 +1,6 @@
 import { crocks } from '../deps.ts'
 import type { Job, Redis, Worker as _Worker } from '../types.ts'
-import { computeSignature, createJobKey, createStoreKey } from './utils.ts'
+import { computeSignature, createJobKey, createQueueKey } from './utils.ts'
 
 const { Async } = crocks
 
@@ -26,7 +26,7 @@ export const Worker = (prefix: string) => {
        * The job name is the same as the hyper queue name
        * so we can use it to look up the queue metadata
        */
-      .map(() => createStoreKey(prefix, job.name))
+      .map(() => createQueueKey(prefix, job.name))
       .chain(Async.fromPromise((key) => redis.get(key)))
       .map((res) => JSON.parse(res as string) as { target: string; secret: string })
       .chain(Async.fromPromise(({ target, secret }) => {

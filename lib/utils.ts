@@ -1,22 +1,22 @@
 import { hmac } from '../deps.ts'
 
 /**
- * eg. prefix_store_{foo-queue}
+ * eg. prefix_queue_{foo-queue}
  *
  * @param prefix - a prefix for the key
  * @param name - the name of the store (will be used for the hashtag to ensure all keys are mapped to the same hash slot)
  */
-export const createStoreKey = (prefix: string, name: string) => `${prefix}_store_{${name}}`
+export const createQueueKey = (prefix: string, name: string) => `${prefix}_queue_{${name}}`
 
 /**
- * eg. prefix_store_{foo-queue}_job_READY_job-id-123
+ * eg. prefix_queue_{foo-queue}_job_READY_job-id-123
  *
  * @param prefix - a prefix for the key
  * @param name - the name of the store (will be used for the hashtag to ensure all keys are mapped to the same hash slot)
  * @param rest - any other parts to include on the key
  */
 export const createJobKey = (prefix: string, name: string, ...rest: string[]) =>
-  `${createStoreKey(prefix, name)}_job_${rest.join('_')}`
+  `${createQueueKey(prefix, name)}_job_${rest.join('_')}`
 
 export const computeSignature = (secret: string, payload: unknown, time: number) => {
   const msg = `${time}.${JSON.stringify(payload, null, 0)}`

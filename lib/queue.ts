@@ -1,7 +1,7 @@
 // deno-lint-ignore-file no-explicit-any
 import { crocks, cuid, HyperErr, R } from '../deps.ts'
 import type { Queue as _Queue, Redis } from '../types.ts'
-import { createJobKey, createStoreKey, trampoline } from './utils.ts'
+import { createJobKey, createQueueKey, trampoline } from './utils.ts'
 
 const { Async } = crocks
 const { map } = R
@@ -17,7 +17,7 @@ type Job = {
 
 export const Queue = (prefix: string) => {
   function checkQueueExists(redis: Redis, name: string) {
-    return Async.of(createStoreKey(prefix, name))
+    return Async.of(createQueueKey(prefix, name))
       .chain(Async.fromPromise((key) => redis.get(key)))
       .chain((v) =>
         v
@@ -161,7 +161,7 @@ export const Queue = (prefix: string) => {
   }
 
   const all = ({ redis }: WithRedis) => () => {
-    return Async.of(createStoreKey(prefix, '*'))
+    return Async.of(createQueueKey(prefix, '*'))
       .chain((matcher) => getKeys(redis, matcher, 50))
       .chain(getValues(redis.mget.bind(redis), 50))
       .map((values) => values.map((value) => value.name))
@@ -173,7 +173,7 @@ export const Queue = (prefix: string) => {
       return checkQueueExists(redis, name)
         .bichain(
           () =>
-            Async.of(createStoreKey(prefix, name))
+            Async.of(createQueueKey(prefix, name))
               .chain(
                 Async.fromPromise((key) =>
                   redis.set(key, JSON.stringify({ name, target, secret }))
@@ -188,9 +188,9 @@ export const Queue = (prefix: string) => {
       /**
        * Find any keys for jobs on the hyper queue and the hyper queue metadata key, itself
        *
-       * eg. prefix_store_{foo-queue}*
+       * eg. prefix_queue_{foo-queue}*
        */
-      .chain(() => getKeys(redis, `${createStoreKey(prefix, name)}*`, 100))
+      .chain(() => getKeys(redis, `${createQueueKey(prefix, name)}*`, 100))
       .chain(deleteKeys(redis, 100))
   }
 
