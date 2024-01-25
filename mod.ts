@@ -19,7 +19,7 @@ export default function BullMqQueueAdapter(config: AdapterConfig) {
 
   const setRedisClient = (
     config: AdapterConfig,
-  ): Pick<ImplConfig, 'queueRedisClient' | 'workerRedisClient'> => {
+  ): Pick<ImplConfig, 'redis'> => {
     const { url } = config
 
     const configFromUrl = url ? new URL(url) : {} as URL
@@ -28,40 +28,34 @@ export default function BullMqQueueAdapter(config: AdapterConfig) {
     const port = Number(configFromUrl.port || '6379')
     const password = configFromUrl.password || undefined
 
-    let queueRedisClient, workerRedisClient
+    let redisClient
     /**
      * See https://docs.bullmq.io/bull/patterns/persistent-connections
      * on why we set maxRetriesPerRequest differently for Queues vs. Workers
      */
     if (config.options?.cluster) {
-      queueRedisClient = new Cluster([{ host, port }], {
-        redisOptions: { maxRetriesPerRequest: 20 },
-      })
-      workerRedisClient = queueRedisClient.duplicate([{ host, port }], {
-        redisOptions: { maxRetriesPerRequest: 20 },
-      })
+      redisClient = new Cluster([{ host, port }], { redisOptions: { password } })
     } else {
-      queueRedisClient = new Redis({ host, port, password, maxRetriesPerRequest: 20 })
-      workerRedisClient = queueRedisClient.duplicate({ maxRetriesPerRequest: null })
+      redisClient = new Redis({ host, port, password })
     }
 
-    return { queueRedisClient, workerRedisClient }
+    return { redis: { client: redisClient, host, port, password } }
   }
 
-  const setCreateQueue = (): ImplConfig['createQueue'] => ({ redisClient, keyPrefix }) =>
+  const setCreateQueue = (): ImplConfig['createQueue'] => ({ host, port, password, keyPrefix }) =>
     new Queue('hyper-queue', {
-      connection: redisClient,
+      connection: { host, port, password },
       prefix: keyPrefix,
     })
 
   const setCreateWorker =
-    (): ImplConfig['createWorker'] => ({ redisClient, processor, keyPrefix }) => {
+    (): ImplConfig['createWorker'] => ({ host, port, password, processor, keyPrefix }) => {
       return new Worker(
         'hyper-queue',
         processor,
         {
           prefix: keyPrefix,
-          connection: redisClient,
+          connection: { host, port, password },
           /**
            * The adapter uses its own mechanism for
            * storing failed jobs, and so does not need

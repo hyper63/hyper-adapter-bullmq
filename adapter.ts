@@ -16,8 +16,7 @@ const handleHyperErr = ifElse(
 export function adapter(
   {
     fetch,
-    queueRedisClient,
-    workerRedisClient,
+    redis,
     createQueue,
     createWorker,
     concurrency,
@@ -27,33 +26,45 @@ export function adapter(
 ) {
   const $queue = (() => {
     const queue = Queue(keyPrefix)
-    const queueClient = createQueue({ redisClient: queueRedisClient, keyPrefix })
-    Deno.addSignalListener('SIGINT', queue.close({ redis: queueRedisClient, queue: queueClient }))
+    const queueClient = createQueue({ ...redis, keyPrefix })
 
     return {
-      all: queue.all({ redis: queueRedisClient }),
-      create: queue.create({ redis: queueRedisClient }),
-      destroy: queue.destroy({ redis: queueRedisClient }),
-      enqueue: queue.enqueue({ redis: queueRedisClient, queue: queueClient }),
-      jobs: queue.jobs({ redis: queueRedisClient, queue: queueClient }),
-      retry: queue.retry({ redis: queueRedisClient, queue: queueClient }),
-      cancel: queue.cancel({ redis: queueRedisClient, queue: queueClient }),
+      all: queue.all({ redis: redis.client }),
+      create: queue.create({ redis: redis.client }),
+      destroy: queue.destroy({ redis: redis.client }),
+      enqueue: queue.enqueue({ redis: redis.client, queue: queueClient }),
+      jobs: queue.jobs({ redis: redis.client, queue: queueClient }),
+      retry: queue.retry({ redis: redis.client, queue: queueClient }),
+      cancel: queue.cancel({ redis: redis.client, queue: queueClient }),
+      close: queue.close({ redis: redis.client, queue: queueClient }),
     }
-  })() /**
+  })()
+
+  /**
    * Create workers according to the desired concurrency
    */
-  ;(() => {
+  const $workers = (() => {
     const worker = Worker(keyPrefix)
-    const processor = worker.process({ redis: queueRedisClient, fetch, failedTtl })
-    Array(concurrency).fill(0).map(() => {
-      const workerClient = createWorker({
-        redisClient: workerRedisClient,
-        processor,
-        keyPrefix,
-      })
-      Deno.addSignalListener('SIGINT', worker.close({ worker: workerClient }))
-    })
+    const processor = worker.process({ redis: redis.client, fetch, failedTtl })
+
+    const workerClients = Array(concurrency).fill(0).map(() =>
+      createWorker({ ...redis, processor, keyPrefix })
+    )
+
+    return {
+      closeAll: () => Promise.all(workerClients.map((wc) => worker.close({ worker: wc })())),
+    }
   })()
+
+  Deno.addSignalListener(
+    'SIGINT',
+    () =>
+      Promise.resolve()
+        .then(() => $workers.closeAll())
+        .then(() => $queue.close())
+        .then(() => redis.client.quit())
+        .then(() => Deno.exit()),
+  )
 
   function index() {
     return $queue.all()

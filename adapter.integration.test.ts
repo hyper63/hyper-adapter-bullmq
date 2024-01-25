@@ -16,8 +16,7 @@ Deno.test({
      * Load configuration
      */
     const {
-      queueRedisClient,
-      workerRedisClient,
+      redis,
       createQueue,
       createWorker,
       concurrency,
@@ -29,8 +28,7 @@ Deno.test({
      * Execute the test suite, injecting our configuration
      */
     await suite(t, { target: 'http://localhost:3000/hooks/jobs', job: JOB })({
-      queueRedisClient,
-      workerRedisClient,
+      redis,
       /**
        * Mock fetch in the test suite
        */
