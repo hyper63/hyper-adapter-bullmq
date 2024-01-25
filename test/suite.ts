@@ -1,5 +1,5 @@
 // deno-lint-ignore-file no-explicit-any require-await
-import { assert, assertEquals, assertObjectMatch } from '../dev_deps.ts'
+import { assert, assertEquals, assertObjectMatch, createHyperVerify } from '../dev_deps.ts'
 
 import { adapter } from '../adapter.ts'
 import { ImplConfig } from '../types.ts'
@@ -147,12 +147,20 @@ async (
        */
       if (isMockFetch) {
         worker = new Promise((resolve) => {
+          const hyperVerify = createHyperVerify('foobar', '5m')
+
           innerMockFetch = async (url: string, options: any) => {
             assertEquals(url, target)
             assertEquals(options.method, 'POST')
             assertEquals(JSON.parse(options.body), job)
             assertEquals(options.headers['Content-Type'], 'application/json')
             assert(options.headers['X-HYPER-SIGNATURE'])
+            assert(
+              hyperVerify(
+                options.headers['X-HYPER-SIGNATURE'],
+                JSON.parse(options.body),
+              ).ok,
+            )
 
             resolve(undefined)
 
