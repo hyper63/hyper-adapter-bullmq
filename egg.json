@@ -1,0 +1,8 @@
+{
+  "name": "hyper-adapter-bullmq",
+  "entry": "./mod.ts",
+  "description": "Hyper Queue port adapter for BullMQ",
+  "homepage": "https://github.com/hyper63/hyper-adapter-bullmq",
+  "repo": "https://github.com/hyper63/hyper-adapter-bullmq",
+  "version": "0.0.1"
+}
