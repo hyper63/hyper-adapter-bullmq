@@ -24,7 +24,7 @@ jobs:
         deno-version: [1.x]
     steps:
       - name: ⬇️ Checkout repo
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: 🦕 Setup Deno
         uses: denoland/setup-deno@v1
@@ -49,7 +49,7 @@ jobs:
         redis-version: [7]
     steps:
       - name: ⬇️ Checkout repo
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: 🦕 Setup Deno
         uses: denoland/setup-deno@v1
@@ -62,9 +62,9 @@ jobs:
         with:
           redis-version: ${{ matrix.redis-version }}
 
-      - name: ⚡ Run Native Integration Tests
+      - name: ⚡ Run Integration Tests
         run: |
-          deno task test:integration-native
+          deno task test:integration
         env:
           CI: true
           REDIS_URL: http://127.0.0.1:6379
@@ -76,7 +76,7 @@ jobs:
     needs: [test, test-integration]
     steps:
       - name: ⬇️ Checkout repo
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
       
